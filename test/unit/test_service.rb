@@ -9,7 +9,7 @@ class TestReport < Test::Unit::TestCase
     @service = BingAdsReporting::Service.new(yml)
     @id_to_check = "30000000980814567"
   end
-    
+
   def test_scheduling_report
     period = Datebox::Period.new(Date.today - 1, Date.today - 1)
     id = @service.generate_report({report_type: 'KeywordPerformance',
@@ -42,5 +42,5 @@ class TestReport < Test::Unit::TestCase
     assert body.size > 0
     assert_equal 'ASCII-8BIT', body.encoding.to_s
   end
-  
+
 end

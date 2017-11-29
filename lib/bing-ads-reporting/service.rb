@@ -1,6 +1,6 @@
 module BingAdsReporting
   class AuthenticationTokenExpired < Exception; end
-  
+
   class Service
     SUCCESS = 'Success'
 
@@ -8,14 +8,14 @@ module BingAdsReporting
       @settings = settings
       @logger = logger || Logger.new($stdout)
     end
-  
+
     def generate_report(report_settings, report_params)
       options = default_options(report_settings).merge(report_params)
       period = options[:period]
       report_type = options[:report_type]
-    
-      begin
-        response = client.call(:submit_generate_report, message: {
+
+      call_params = {
+        message: {
           ns('ReportRequest') => {
             ns("Format") => options[:format],
             ns("Language") => "English",
@@ -46,13 +46,17 @@ module BingAdsReporting
               # ns("PredefinedTime") => options[:time]
             }
           },
-          :attributes! => {ns("ReportRequest") => {
-                                                   "i:type" => ns("#{report_type}ReportRequest"),
-                                                   "i:nil" => 'false'
-                                                   }
+          :attributes! => {
+            ns("ReportRequest") => {
+              "i:type" => ns("#{report_type}ReportRequest"),
+              "i:nil" => 'false'
+            }
           }
-        })
-        
+        }
+      }
+
+      begin
+        response = client.call(:submit_generate_report, call_params)
       rescue Savon::SOAPFault => e
         msg = 'unexpected error'
         err = e.to_hash[:fault][:detail][:ad_api_fault_detail][:errors][:ad_api_error][:error_code] rescue nil
@@ -69,22 +73,22 @@ module BingAdsReporting
         @logger.error msg
         raise e
       end
-      
+
       response.body[:submit_generate_report_response][:report_request_id]
     end
-  
+
     def report_ready?(id)
       polled = poll_report(id)
       status = polled.body[:poll_generate_report_response][:report_request_status][:status] rescue nil
       raise "Report status: Error for ID: #{id}. TrackingId: #{polled.header[:tracking_id]}" if status == "Error"
       status == SUCCESS
     end
-    
+
     # returns nil if there is no data
     def report_body(id)
       download(report_url(id))
     end
-  
+
     private
 
       def report_url(id)
@@ -95,7 +99,7 @@ module BingAdsReporting
         raise "Report URL is not available for report id #{id}" unless download_url
         download_url
       end
-  
+
       def default_options(report_settings)
         { format: report_settings[:report_format],
           columns: report_settings[:columns],
@@ -103,7 +107,7 @@ module BingAdsReporting
           report_type: report_settings[:report_type],
           report_name: "MyReport" }
       end
-      
+
       def poll_report(id)
         begin
           client.call(:poll_generate_report, message: {
@@ -127,33 +131,57 @@ module BingAdsReporting
         return unless url
         @logger.debug "Downloading Bing report from: #{url}"
         curl = Curl::Easy.new(url)
+
+        if @settings[:timeout].present?
+          curl.timeout = @settings[:timeout]
+        end
+
         curl.perform
         curl.body_str
       end
 
       def client
         if @settings[:username] && @settings[:password]
-          header = {ns('ApplicationToken') => @settings[:applicationToken],
-                                              ns('CustomerAccountId') => @settings[:accountId],
-                                              ns('CustomerId') => @settings[:customerId],
-                                              ns('DeveloperToken') => @settings[:developerToken],
-                                              ns('UserName') => @settings[:username],
-                                              ns('Password') => @settings[:password] }
+          header = {
+            ns('ApplicationToken') => @settings[:applicationToken],
+            ns('CustomerAccountId') => @settings[:accountId],
+            ns('CustomerId') => @settings[:customerId],
+            ns('DeveloperToken') => @settings[:developerToken],
+            ns('UserName') => @settings[:username],
+            ns('Password') => @settings[:password]
+          }
         else
-          header = {ns('ApplicationToken') => @settings[:applicationToken],
-                                              ns('CustomerAccountId') => @settings[:accountId],
-                                              ns('CustomerId') => @settings[:customerId],
-                                              ns('DeveloperToken') => @settings[:developerToken],
-                                              ns('AuthenticationToken') => @settings[:authenticationToken] }
+          header = {
+            ns('ApplicationToken') => @settings[:applicationToken],
+            ns('CustomerAccountId') => @settings[:accountId],
+            ns('CustomerId') => @settings[:customerId],
+            ns('DeveloperToken') => @settings[:developerToken],
+            ns('AuthenticationToken') => @settings[:authenticationToken]
+          }
         end
-        Savon.client({
-                      wsdl: "https://reporting.api.bingads.microsoft.com/Api/Advertiser/Reporting/V11/ReportingService.svc?singleWsdl",
-                      log_level: :info,
-                      namespaces: { "xmlns:arr" => 'http://schemas.microsoft.com/2003/10/Serialization/Arrays',
-                                    "xmlns:i" => "http://www.w3.org/2001/XMLSchema-instance" },
-                      soap_header: header
-                      })
-                      # .merge({pretty_print_xml: true, log_level: :debug, log: true, logger: @logger})) # for more logging
+
+        client_options = {
+          wsdl: 'https://reporting.api.bingads.microsoft.com/Api/Advertiser/Reporting/V11/ReportingService.svc?singleWsdl',
+          log_level: :info,
+          namespaces: {
+            'xmlns:arr' => 'http://schemas.microsoft.com/2003/10/Serialization/Arrays',
+            'xmlns:i' => 'http://www.w3.org/2001/XMLSchema-instance'
+          },
+          soap_header: header
+        }
+        # .merge({
+        #   pretty_print_xml: true,
+        #   log_level: :debug,
+        #   log: true,
+        #   logger: @logger
+        # }) # for more logging
+
+        if @settings[:timeout].present?
+          client_options[:open_timeout] = @settings[:timeout]
+          client_options[:read_timeout] = @settings[:timeout]
+        end
+
+        Savon.client(client_options)
       end
 
       def ns(str)
